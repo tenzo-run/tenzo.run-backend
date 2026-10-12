@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: tenzo
+      POSTGRES_USER: tenzo
+      POSTGRES_PASSWORD: tenzo
+    ports:
+      - "5472:5432"
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenzo -d tenzo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TENZO_DATABASE__URL: postgres://tenzo:tenzo@postgres:5432/tenzo?sslmode=disable
+    ports:
+      - "8170:8170"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../tenzo.run-frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8170
+        NEXT_PUBLIC_SITE_URL: http://localhost:3000
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  postgres:

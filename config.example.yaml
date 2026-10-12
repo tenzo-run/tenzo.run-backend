@@ -1,0 +1,40 @@
+env: development
+
+log:
+  level: debug
+  format: text
+
+http:
+  addr: "127.0.0.1:8170"
+  public_url: "http://localhost:8170"
+  read_header_timeout: 5s
+  read_timeout: 15s
+  write_timeout: 30s
+  idle_timeout: 2m
+  shutdown_timeout: 20s
+  allowed_origins:
+    - "http://localhost:3000"
+  trusted_proxies:
+    - "127.0.0.1/32"
+  docs: true
+
+database:
+  url: "postgres://tenzo:tenzo@localhost:5472/tenzo?sslmode=disable"
+  max_conns: 10
+  min_conns: 1
+  max_conn_lifetime: 1h
+  max_conn_idle_time: 15m
+  health_check_period: 30s
+  connect_timeout: 5s
+  statement_timeout: 15s
+  migrate_on_start: true
+
+limits:
+  leads_per_ip:
+    events: 5
+    per: 10m
+
+telegram:
+  api_url: "https://api.telegram.org"
+  bot_token: ""
+  chat_id: ""

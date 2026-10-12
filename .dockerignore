@@ -1,0 +1,7 @@
+.git
+.idea
+.vscode
+bin
+.env
+config.yaml
+coverage.out

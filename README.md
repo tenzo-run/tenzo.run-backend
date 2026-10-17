@@ -24,7 +24,7 @@ API: `http://localhost:8170/api/v1`, документация: `http://localhost
 
 | Метод | Путь | Что делает |
 | --- | --- | --- |
-| `POST` | `/api/v1/leads` | заявка с сайта: `name`, `contact`, `locale`, `page`, `website`; ответ `201 {"id": "<uuid>"}` |
+| `POST` | `/api/v1/leads` | заявка с сайта: `name`, `contact`, `locale`, `page`, `message`, `website`; ответ `201 {"id": "<uuid>"}` |
 | `GET` | `/healthz` | процесс жив |
 | `GET` | `/readyz` | база доступна |
 | `GET` | `/docs`, `/openapi.json` | документация, если включена `http.docs` |

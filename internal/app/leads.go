@@ -29,10 +29,10 @@ func printLatestLeads(ctx context.Context, svc *lead.Service, limit int, w io.Wr
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "TIME\tNAME\tCONTACT\tLOCALE\tPAGE")
+	fmt.Fprintln(tw, "TIME\tNAME\tCONTACT\tLOCALE\tPAGE\tMESSAGE")
 	for _, l := range leads {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			l.CreatedAt.UTC().Format(leadTimeLayout), cell(l.Name), cell(l.Contact), l.Locale, cell(l.Page))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			l.CreatedAt.UTC().Format(leadTimeLayout), cell(l.Name), cell(l.Contact), l.Locale, cell(l.Page), cell(l.Message))
 	}
 	return tw.Flush()
 }

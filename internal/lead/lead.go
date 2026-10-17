@@ -17,6 +17,7 @@ const (
 	minContactLength = 3
 	maxContactLength = 200
 	maxPageLength    = 300
+	maxMessageLength = 2000
 
 	DefaultListLimit = 20
 	MaxListLimit     = 500
@@ -27,6 +28,7 @@ var (
 	ErrInvalidContact = apperr.Invalid("contact must be 3 to 200 characters")
 	ErrInvalidLocale  = apperr.Invalid("locale must be ru, en or zh")
 	ErrInvalidPage    = apperr.Invalid("page must not exceed 300 characters")
+	ErrInvalidMessage = apperr.Invalid("message must not exceed 2000 characters")
 	ErrInvalidLimit   = apperr.Invalid("limit must be between 1 and 500")
 )
 
@@ -48,6 +50,7 @@ type Lead struct {
 	Contact   string
 	Locale    Locale
 	Page      string
+	Message   string
 	IP        netip.Addr
 	CreatedAt time.Time
 }
@@ -57,6 +60,7 @@ type Draft struct {
 	Contact string
 	Locale  Locale
 	Page    string
+	Message string
 	Website string
 	IP      netip.Addr
 }
@@ -65,6 +69,7 @@ func (d *Draft) normalize() {
 	d.Name = strings.TrimSpace(d.Name)
 	d.Contact = strings.TrimSpace(d.Contact)
 	d.Page = strings.TrimSpace(d.Page)
+	d.Message = strings.TrimSpace(d.Message)
 	d.Website = strings.TrimSpace(d.Website)
 }
 
@@ -82,6 +87,8 @@ func (d Draft) Validate() error {
 		return ErrInvalidLocale
 	case !between(d.Page, 0, maxPageLength):
 		return ErrInvalidPage
+	case !between(d.Message, 0, maxMessageLength):
+		return ErrInvalidMessage
 	}
 	return nil
 }
@@ -93,6 +100,7 @@ func (d Draft) lead(id uuid.UUID, createdAt time.Time) Lead {
 		Contact:   d.Contact,
 		Locale:    d.Locale,
 		Page:      d.Page,
+		Message:   d.Message,
 		IP:        d.IP,
 		CreatedAt: createdAt,
 	}

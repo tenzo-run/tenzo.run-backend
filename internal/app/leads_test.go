@@ -54,6 +54,7 @@ func TestCreateLeadStoresAndNotifies(t *testing.T) {
 		"contact": " t.me/anna ",
 		"locale":  "en",
 		"page":    "/en/contact",
+		"message": "  Нужен бот для записи  ",
 	}}, 201, nil)
 
 	var out createdBody
@@ -66,18 +67,18 @@ func TestCreateLeadStoresAndNotifies(t *testing.T) {
 	}
 
 	var (
-		name, contact, locale, page string
-		ip                          netip.Addr
-		createdAt                   time.Time
+		name, contact, locale, page, message string
+		ip                                   netip.Addr
+		createdAt                            time.Time
 	)
 	err = s.pool.QueryRow(t.Context(),
-		`select name, contact, locale::text, page, ip, created_at from leads where public_id = $1`, id,
-	).Scan(&name, &contact, &locale, &page, &ip, &createdAt)
+		`select name, contact, locale::text, page, message, ip, created_at from leads where public_id = $1`, id,
+	).Scan(&name, &contact, &locale, &page, &message, &ip, &createdAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name != "Анна" || contact != "t.me/anna" || locale != "en" || page != "/en/contact" {
-		t.Fatalf("row = %q %q %q %q", name, contact, locale, page)
+	if name != "Анна" || contact != "t.me/anna" || locale != "en" || page != "/en/contact" || message != "Нужен бот для записи" {
+		t.Fatalf("row = %q %q %q %q %q", name, contact, locale, page, message)
 	}
 	if ip != netip.MustParseAddr("203.0.113.10") {
 		t.Fatalf("ip = %s", ip)
@@ -87,7 +88,7 @@ func TestCreateLeadStoresAndNotifies(t *testing.T) {
 	}
 
 	text := s.message()
-	for _, part := range []string{"Имя: Анна", "Контакт: t.me/anna", "Язык: en", "Страница: /en/contact", "Время: "} {
+	for _, part := range []string{"Имя: Анна", "Контакт: t.me/anna", "Язык: en", "Страница: /en/contact", "Задача: Нужен бот для записи", "Время: "} {
 		if !strings.Contains(text, part) {
 			t.Errorf("message %q has no %q", text, part)
 		}
@@ -129,6 +130,7 @@ func TestCreateLeadValidation(t *testing.T) {
 		{"unknown locale", map[string]string{"name": "Анна", "contact": "@anna", "locale": "de"}, ""},
 		{"missing locale", map[string]string{"name": "Анна", "contact": "@anna"}, ""},
 		{"long page", map[string]string{"name": "Анна", "contact": "@anna", "locale": "ru", "page": strings.Repeat("p", 301)}, ""},
+		{"long message", map[string]string{"name": "Анна", "contact": "@anna", "locale": "ru", "message": strings.Repeat("м", 2001)}, ""},
 		{"long honeypot", map[string]string{"name": "Анна", "contact": "@anna", "locale": "ru", "website": strings.Repeat("w", 201)}, ""},
 		{"unknown field", map[string]string{"name": "Анна", "contact": "@anna", "locale": "ru", "email": "a@b.c"}, ""},
 		{"locale is not a string", nil, `{"name":"Анна","contact":"@anna","locale":1}`},

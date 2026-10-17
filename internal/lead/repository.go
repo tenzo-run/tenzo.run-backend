@@ -10,7 +10,7 @@ import (
 )
 
 const selectLeads = `
-	select public_id, name, contact, locale, page, ip, created_at
+	select public_id, name, contact, locale, page, message, ip, created_at
 	from leads`
 
 type Repository struct {
@@ -23,10 +23,10 @@ func NewRepository(db postgres.DB) *Repository {
 
 func (r *Repository) insert(ctx context.Context, l Lead) error {
 	const q = `
-		insert into leads (public_id, name, contact, locale, page, ip, created_at)
-		values ($1, $2, $3, $4, $5, $6, $7)`
+		insert into leads (public_id, name, contact, locale, page, message, ip, created_at)
+		values ($1, $2, $3, $4, $5, $6, $7, $8)`
 
-	_, err := r.db.Exec(ctx, q, l.ID, l.Name, l.Contact, string(l.Locale), l.Page, ipArg(l.IP), l.CreatedAt)
+	_, err := r.db.Exec(ctx, q, l.ID, l.Name, l.Contact, string(l.Locale), l.Page, l.Message, ipArg(l.IP), l.CreatedAt)
 	return err
 }
 
@@ -44,7 +44,7 @@ func scan(row pgx.CollectableRow) (Lead, error) {
 		locale string
 		ip     *netip.Addr
 	)
-	if err := row.Scan(&l.ID, &l.Name, &l.Contact, &locale, &l.Page, &ip, &l.CreatedAt); err != nil {
+	if err := row.Scan(&l.ID, &l.Name, &l.Contact, &locale, &l.Page, &l.Message, &ip, &l.CreatedAt); err != nil {
 		return Lead{}, err
 	}
 	l.Locale = Locale(locale)

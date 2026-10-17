@@ -21,6 +21,7 @@ type RequestBody struct {
 	Contact string `json:"contact" minLength:"3" maxLength:"200" doc:"Telegram handle, WhatsApp or phone number, or email"`
 	Locale  Locale `json:"locale" enum:"ru,en,zh" doc:"Language of the page the request was sent from"`
 	Page    string `json:"page,omitempty" maxLength:"300" required:"false" doc:"Path of the page with the form"`
+	Message string `json:"message,omitempty" maxLength:"2000" required:"false" doc:"What the client wants to build"`
 	Website string `json:"website,omitempty" maxLength:"200" required:"false" doc:"Must stay empty"`
 }
 
@@ -30,6 +31,7 @@ func (b RequestBody) draft(ip netip.Addr) Draft {
 		Contact: b.Contact,
 		Locale:  b.Locale,
 		Page:    b.Page,
+		Message: b.Message,
 		Website: b.Website,
 		IP:      ip,
 	}

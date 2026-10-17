@@ -17,6 +17,11 @@ func notice(l Lead) string {
 		page = noPage
 	}
 
+	message := l.Message
+	if message == "" {
+		message = noPage
+	}
+
 	var b strings.Builder
 	b.WriteString(noticeTitle)
 	for _, field := range []struct{ label, value string }{
@@ -24,6 +29,7 @@ func notice(l Lead) string {
 		{"Контакт", l.Contact},
 		{"Язык", string(l.Locale)},
 		{"Страница", page},
+		{"Задача", message},
 		{"Время", l.CreatedAt.UTC().Format(noticeTimeLayout)},
 	} {
 		fmt.Fprintf(&b, "\n%s: %s", field.label, field.value)

@@ -32,6 +32,8 @@ func TestDraftValidate(t *testing.T) {
 		{"unknown locale", func(d *Draft) { d.Locale = "de" }, ErrInvalidLocale},
 		{"no locale", func(d *Draft) { d.Locale = "" }, ErrInvalidLocale},
 		{"long page", func(d *Draft) { d.Page = strings.Repeat("p", maxPageLength+1) }, ErrInvalidPage},
+		{"longest message", func(d *Draft) { d.Message = strings.Repeat("м", maxMessageLength) }, nil},
+		{"long message", func(d *Draft) { d.Message = strings.Repeat("м", maxMessageLength+1) }, ErrInvalidMessage},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

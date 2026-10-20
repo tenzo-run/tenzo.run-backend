@@ -186,7 +186,7 @@ func Default() Config {
 				Effort:   "medium",
 				Dir:      "/var/lib/tenzo/claude",
 				Timeout:  90 * time.Second,
-				Hedge:    8 * time.Second,
+				Hedge:    6 * time.Second,
 				Check:    20 * time.Second,
 				Parallel: 2,
 			},

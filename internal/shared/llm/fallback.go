@@ -12,7 +12,7 @@ import (
 const (
 	probeText    = "ping"
 	probeTimeout = 15 * time.Second
-	fastProbe    = 10 * time.Second
+	fastProbe    = 5 * time.Second
 	recoverAfter = 3
 
 	fromPrimary = 0

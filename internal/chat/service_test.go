@@ -417,7 +417,9 @@ func TestNextMessageDoesNotWaitForExtraction(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- svc.Reply(t.Context(), Input{Session: first.session, Text: "два"}, &recordingEmitter{}) }()
+	go func() {
+		done <- svc.Reply(t.Context(), Input{Session: first.session, Text: "два"}, &recordingEmitter{})
+	}()
 	select {
 	case err := <-done:
 		if err != nil {

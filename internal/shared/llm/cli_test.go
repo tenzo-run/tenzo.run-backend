@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -139,6 +140,7 @@ func TestEnvDoesNotLeakServiceSecrets(t *testing.T) {
 }
 
 type scripted struct {
+	mu     sync.Mutex
 	calls  int
 	deltas []string
 	res    Result
@@ -146,6 +148,8 @@ type scripted struct {
 }
 
 func (s *scripted) Stream(_ context.Context, _ Request, onDelta func(string)) (Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls++
 	for _, d := range s.deltas {
 		onDelta(d)
@@ -153,17 +157,14 @@ func (s *scripted) Stream(_ context.Context, _ Request, onDelta func(string)) (R
 	return s.res, s.err
 }
 
-func newTestFallback(primary, backup Streamer) (*Fallback, *time.Time) {
-	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
-	f := NewFallback(primary, backup, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	f.now = func() time.Time { return now }
-	return f, &now
+func newTestFallback(primary, backup Streamer) *Fallback {
+	return NewFallback(primary, backup, 10*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func TestFallbackSwitchesToBackupAndComesBack(t *testing.T) {
 	primary := &scripted{err: errors.New("llm answered 503")}
 	backup := &scripted{deltas: []string{"ok"}, res: Result{Content: "ok"}}
-	f, now := newTestFallback(primary, backup)
+	f := newTestFallback(primary, backup)
 
 	var got strings.Builder
 	res, err := f.Stream(t.Context(), Request{}, func(d string) { got.WriteString(d) })
@@ -172,20 +173,35 @@ func TestFallbackSwitchesToBackupAndComesBack(t *testing.T) {
 	}
 
 	if _, err := f.Stream(t.Context(), Request{}, func(string) {}); err != nil || primary.calls != 1 || backup.calls != 2 {
-		t.Fatalf("cooldown: calls %d/%d, %v", primary.calls, backup.calls, err)
+		t.Fatalf("while down: calls %d/%d, %v", primary.calls, backup.calls, err)
 	}
 
-	*now = now.Add(2 * time.Minute)
+	if err := f.Probe(t.Context()); err == nil {
+		t.Fatal("probe of a dead primary must fail")
+	}
+	primary.mu.Lock()
 	primary.err, primary.res = nil, Result{Content: "снова"}
-	if res, _ := f.Stream(t.Context(), Request{}, func(string) {}); res.Content != "снова" || primary.calls != 2 || backup.calls != 2 {
-		t.Fatalf("recovered: %+v, calls %d/%d", res, primary.calls, backup.calls)
+	primary.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { f.Run(ctx); close(done) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for f.isDown() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if res, _ := f.Stream(t.Context(), Request{}, func(string) {}); res.Content != "снова" || backup.calls != 2 {
+		t.Fatalf("recovered: %+v, backup calls %d", res, backup.calls)
 	}
 }
 
 func TestFallbackKeepsPartialAnswersAndCancellations(t *testing.T) {
 	primary := &scripted{deltas: []string{"Здрав"}, err: errors.New("stream broke")}
 	backup := &scripted{res: Result{Content: "x"}}
-	f, _ := newTestFallback(primary, backup)
+	f := newTestFallback(primary, backup)
 	if _, err := f.Stream(t.Context(), Request{}, func(string) {}); err == nil || backup.calls != 0 {
 		t.Fatalf("partial answer was retried: %v, backup %d", err, backup.calls)
 	}
@@ -201,7 +217,7 @@ func TestFallbackKeepsPartialAnswersAndCancellations(t *testing.T) {
 func TestFallbackTreatsEmptyAnswerAsFailure(t *testing.T) {
 	primary := &scripted{}
 	backup := &scripted{res: Result{ToolCalls: []ToolCall{{ID: "cli_1"}}}}
-	f, _ := newTestFallback(primary, backup)
+	f := newTestFallback(primary, backup)
 	res, err := f.Stream(t.Context(), Request{}, func(string) {})
 	if err != nil || len(res.ToolCalls) != 1 || backup.calls != 1 {
 		t.Fatalf("res = %+v, %v", res, err)

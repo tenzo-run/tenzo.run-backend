@@ -91,6 +91,7 @@ func TestValidateRejectsEachInvalidField(t *testing.T) {
 		{"backup relative dir", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Dir = "claude", "claude" }, "ai.fallback.dir"},
 		{"backup unknown effort", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Effort = "claude", "huge" }, "ai.fallback.effort"},
 		{"backup slower than reply", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Timeout = "claude", 5*time.Minute }, "ai.fallback.timeout"},
+		{"backup checks too often", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Check = "claude", time.Millisecond }, "ai.fallback.check_interval"},
 		{"backup too parallel", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Parallel = "claude", 9 }, "ai.fallback.parallel"},
 		{"no chat turns", func(c *Config) { c.Chat.MaxTurns = 0 }, "chat.max_turns"},
 		{"short chat history", func(c *Config) { c.Chat.HistoryTurns = 1 }, "chat.history_turns"},

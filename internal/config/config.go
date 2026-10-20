@@ -112,7 +112,7 @@ type Fallback struct {
 	Token    string        `koanf:"token"`
 	Dir      string        `koanf:"dir"`
 	Timeout  time.Duration `koanf:"timeout"`
-	Cooldown time.Duration `koanf:"cooldown"`
+	Check    time.Duration `koanf:"check_interval"`
 	Parallel int           `koanf:"parallel"`
 }
 
@@ -177,7 +177,7 @@ func Default() Config {
 		AI: AI{
 			BaseURL:     "https://llm.rate-cloud.com/v1",
 			Model:       "qwen-3.8-max",
-			Timeout:     60 * time.Second,
+			Timeout:     25 * time.Second,
 			Temperature: 0.4,
 			MaxTokens:   600,
 			Fallback: Fallback{
@@ -185,7 +185,7 @@ func Default() Config {
 				Effort:   "medium",
 				Dir:      "/var/lib/tenzo/claude",
 				Timeout:  90 * time.Second,
-				Cooldown: 3 * time.Minute,
+				Check:    20 * time.Second,
 				Parallel: 2,
 			},
 		},
@@ -338,8 +338,9 @@ func (c Config) Validate() error {
 		check(f.Model != "", "ai.fallback.model is required")
 		check(f.Effort == "" || slices.Contains(fallbackEfforts, f.Effort), "ai.fallback.effort must be one of low, medium, high, xhigh, max")
 		check(path.IsAbs(f.Dir), "ai.fallback.dir must be an absolute path")
-		check(f.Timeout > 0 && f.Timeout < c.Chat.ReplyTimeout, "ai.fallback.timeout must be positive and less than chat.reply_timeout")
-		check(f.Cooldown > 0, "ai.fallback.cooldown must be positive")
+		check(f.Timeout > 0, "ai.fallback.timeout must be positive")
+		check(f.Check >= time.Second, "ai.fallback.check_interval must be at least 1s")
+		check(c.AI.Timeout+f.Timeout <= c.Chat.ReplyTimeout, "ai.timeout plus ai.fallback.timeout must fit into chat.reply_timeout")
 		check(f.Parallel >= 1 && f.Parallel <= 4, "ai.fallback.parallel must be between 1 and 4")
 	}
 

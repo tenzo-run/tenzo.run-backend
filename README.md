@@ -49,7 +49,8 @@ API: `http://localhost:8170/api/v1`, документация: `http://localhost
 
 Основная модель — OpenAI-совместимый API (`ai.base_url`, `ai.api_key`, `ai.model`). Если задан
 `ai.fallback.command` (путь к Claude Code CLI) и `ai.fallback.token` (`claude setup-token`), при сбое основной
-модели ответы на `ai.fallback.cooldown` переходят на запасную.
+модели (ошибка или нет ответа за `ai.timeout`) этот же запрос уходит в запасную, а основная проверяется
+коротким запросом раз в `ai.fallback.check_interval` и, как только отвечает, снова принимает все запросы.
 
 Бот работает через long polling. Владельцы — `telegram.admins` (ники) и `telegram.chat_ids` (числовые id):
 достаточно написать боту `/start` с нужного аккаунта. Ещё один способ — секретная ссылка

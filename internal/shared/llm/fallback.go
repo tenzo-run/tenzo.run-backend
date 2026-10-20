@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const probeText = "ping"
+
 var errEmptyAnswer = errors.New("empty answer")
 
 type Streamer interface {
@@ -16,22 +18,21 @@ type Streamer interface {
 }
 
 type Fallback struct {
-	primary  Streamer
-	backup   Streamer
-	cooldown time.Duration
-	log      *slog.Logger
-	now      func() time.Time
+	primary Streamer
+	backup  Streamer
+	check   time.Duration
+	log     *slog.Logger
 
-	mu    sync.Mutex
-	until time.Time
+	mu   sync.Mutex
+	down bool
 }
 
-func NewFallback(primary, backup Streamer, cooldown time.Duration, log *slog.Logger) *Fallback {
-	return &Fallback{primary: primary, backup: backup, cooldown: cooldown, log: log, now: time.Now}
+func NewFallback(primary, backup Streamer, check time.Duration, log *slog.Logger) *Fallback {
+	return &Fallback{primary: primary, backup: backup, check: check, log: log}
 }
 
 func (f *Fallback) Stream(ctx context.Context, r Request, onDelta func(string)) (Result, error) {
-	if !f.tripped() {
+	if !f.isDown() {
 		sent := false
 		res, err := f.primary.Stream(ctx, r, func(d string) {
 			sent = true
@@ -41,13 +42,12 @@ func (f *Fallback) Stream(ctx context.Context, r Request, onDelta func(string)) 
 			err = errEmptyAnswer
 		}
 		if err == nil {
-			f.recover(ctx)
 			return res, nil
 		}
 		if sent || ctx.Err() != nil {
 			return res, err
 		}
-		f.trip(ctx, err)
+		f.markDown(ctx, err)
 	}
 
 	res, err := f.backup.Stream(ctx, r, onDelta)
@@ -57,26 +57,49 @@ func (f *Fallback) Stream(ctx context.Context, r Request, onDelta func(string)) 
 	return res, nil
 }
 
-func (f *Fallback) tripped() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.now().Before(f.until)
-}
-
-func (f *Fallback) trip(ctx context.Context, err error) {
-	f.mu.Lock()
-	first := f.until.IsZero()
-	f.until = f.now().Add(f.cooldown)
-	f.mu.Unlock()
-	if first {
-		f.log.WarnContext(ctx, "primary model failed, switching to backup", slog.Any("error", err), slog.Duration("for", f.cooldown))
+func (f *Fallback) Run(ctx context.Context) {
+	t := time.NewTicker(f.check)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if f.isDown() && f.Probe(ctx) == nil {
+			f.markUp(ctx)
+		}
 	}
 }
 
-func (f *Fallback) recover(ctx context.Context) {
+func (f *Fallback) Probe(ctx context.Context) error {
+	res, err := f.primary.Stream(ctx, Request{Messages: []Message{{Role: "user", Content: probeText}}}, func(string) {})
+	if err == nil && res.Content == "" && len(res.ToolCalls) == 0 {
+		err = errEmptyAnswer
+	}
+	return err
+}
+
+func (f *Fallback) isDown() bool {
 	f.mu.Lock()
-	was := !f.until.IsZero()
-	f.until = time.Time{}
+	defer f.mu.Unlock()
+	return f.down
+}
+
+func (f *Fallback) markDown(ctx context.Context, err error) {
+	f.mu.Lock()
+	was := f.down
+	f.down = true
+	f.mu.Unlock()
+	if !was {
+		f.log.WarnContext(ctx, "primary model failed, switching to backup", slog.Any("error", err), slog.Duration("check_every", f.check))
+	}
+}
+
+func (f *Fallback) markUp(ctx context.Context) {
+	f.mu.Lock()
+	was := f.down
+	f.down = false
 	f.mu.Unlock()
 	if was {
 		f.log.InfoContext(ctx, "primary model is back")

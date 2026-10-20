@@ -40,6 +40,7 @@ type services struct {
 	updatesLimiter *ratelimit.Limiter
 	relay          *admin.Relay
 	bot            *admin.Bot
+	fallback       *llm.Fallback
 	log            *slog.Logger
 }
 
@@ -71,7 +72,8 @@ func newServices(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) *servi
 	if !cfg.AI.Enabled() {
 		return svc
 	}
-	model := newModel(cfg.AI, log)
+	model, fallback := newModel(cfg.AI, log)
+	svc.fallback = fallback
 	consultantRules := rules.NewService(rules.NewRepository(pool))
 	svc.chat = chat.NewService(chat.NewRepository(pool), model, chatRel, consultantRules, chat.Settings{
 		MaxTurns:      cfg.Chat.MaxTurns,
@@ -87,7 +89,7 @@ func newServices(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) *servi
 	return svc
 }
 
-func newModel(ai config.AI, log *slog.Logger) llm.Streamer {
+func newModel(ai config.AI, log *slog.Logger) (llm.Streamer, *llm.Fallback) {
 	var primary llm.Streamer
 	if ai.Primary() {
 		primary = llm.New(llm.Settings{
@@ -101,7 +103,7 @@ func newModel(ai config.AI, log *slog.Logger) llm.Streamer {
 	}
 	f := ai.Fallback
 	if !f.Enabled() {
-		return primary
+		return primary, nil
 	}
 	if err := os.MkdirAll(f.Dir, fallbackDirMode); err != nil {
 		log.Warn("backup model dir is not available", slog.Any("error", err))
@@ -111,9 +113,10 @@ func newModel(ai config.AI, log *slog.Logger) llm.Streamer {
 		Timeout: f.Timeout, Parallel: f.Parallel,
 	})
 	if primary == nil {
-		return backup
+		return backup, nil
 	}
-	return llm.NewFallback(primary, backup, f.Cooldown, log)
+	fallback := llm.NewFallback(primary, backup, f.Check, log)
+	return fallback, fallback
 }
 
 func (s *services) background(ctx context.Context, g *errgroup.Group) {
@@ -128,6 +131,9 @@ func (s *services) background(ctx context.Context, g *errgroup.Group) {
 	}
 	if s.chat != nil {
 		g.Go(func() error { s.purgeChats(ctx); return nil })
+	}
+	if s.fallback != nil {
+		g.Go(func() error { s.fallback.Run(ctx); return nil })
 	}
 }
 

@@ -10,11 +10,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"tenzo-run-backend/internal/chat"
 	"tenzo-run-backend/internal/config"
 	"tenzo-run-backend/internal/lead"
 	"tenzo-run-backend/internal/shared/httpx"
 	"tenzo-run-backend/internal/shared/postgres"
 )
+
+const apiPrefix = "/api/v1"
 
 var allowedHeaders = []string{
 	"Content-Type",
@@ -54,6 +57,8 @@ func newRouter(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, svc *ser
 		w.WriteHeader(http.StatusOK)
 	})
 
+	r.Method(http.MethodPost, apiPrefix+chat.Path, chat.NewHandler(svc.chat, svc.chatLimiter, cfg.Chat.MaxBodyBytes, cfg.Chat.ReplyTimeout))
+
 	api := humachi.New(r, humaConfig(cfg))
 	registerRoutes(api, svc)
 
@@ -61,8 +66,9 @@ func newRouter(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, svc *ser
 }
 
 func registerRoutes(api huma.API, svc *services) {
-	v1 := huma.NewGroup(api, "/api/v1")
+	v1 := huma.NewGroup(api, apiPrefix)
 	lead.NewHandler(svc.leads, svc.leadLimiter).Register(v1)
+	chat.NewUpdatesHandler(svc.chat, svc.updatesLimiter).Register(v1)
 }
 
 func humaConfig(cfg config.Config) huma.Config {

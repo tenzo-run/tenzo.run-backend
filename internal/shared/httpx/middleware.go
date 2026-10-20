@@ -94,7 +94,7 @@ func Recover(next http.Handler) http.Handler {
 				slog.Any("panic", v),
 				slog.String("stack", string(debug.Stack())),
 			)
-			writeProblem(w, http.StatusInternalServerError)
+			WriteProblem(w, http.StatusInternalServerError)
 		}()
 
 		next.ServeHTTP(w, r)
@@ -161,12 +161,12 @@ func CrossOriginProtection(origins []string) (func(http.Handler) http.Handler, e
 		}
 	}
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeProblem(w, http.StatusForbidden)
+		WriteProblem(w, http.StatusForbidden)
 	}))
 	return cop.Handler, nil
 }
 
-func writeProblem(w http.ResponseWriter, status int) {
+func WriteProblem(w http.ResponseWriter, status int) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(`{"title":"` + http.StatusText(status) + `","status":` + strconv.Itoa(status) + `}`))

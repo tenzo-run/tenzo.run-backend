@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +30,8 @@ type Config struct {
 	Database Database `koanf:"database"`
 	Limits   Limits   `koanf:"limits"`
 	Telegram Telegram `koanf:"telegram"`
+	AI       AI       `koanf:"ai"`
+	Chat     Chat     `koanf:"chat"`
 }
 
 type Log struct {
@@ -61,6 +66,7 @@ type Database struct {
 
 type Limits struct {
 	LeadsPerIP Rate `koanf:"leads_per_ip"`
+	ChatPerIP  Rate `koanf:"chat_per_ip"`
 }
 
 type Rate struct {
@@ -69,10 +75,71 @@ type Rate struct {
 }
 
 type Telegram struct {
-	APIURL   string `koanf:"api_url"`
-	BotToken string `koanf:"bot_token"`
-	ChatID   string `koanf:"chat_id"`
+	APIURL   string        `koanf:"api_url"`
+	BotToken string        `koanf:"bot_token"`
+	ChatIDs  []string      `koanf:"chat_ids"`
+	Admins   []string      `koanf:"admins"`
+	Timeout  time.Duration `koanf:"timeout"`
 }
+
+func (t Telegram) Enabled() bool {
+	return t.BotToken != ""
+}
+
+type AI struct {
+	BaseURL     string        `koanf:"base_url"`
+	APIKey      string        `koanf:"api_key"`
+	Model       string        `koanf:"model"`
+	Timeout     time.Duration `koanf:"timeout"`
+	Temperature float64       `koanf:"temperature"`
+	MaxTokens   int           `koanf:"max_tokens"`
+	Fallback    Fallback      `koanf:"fallback"`
+}
+
+func (a AI) Enabled() bool {
+	return a.Primary() || a.Fallback.Enabled()
+}
+
+func (a AI) Primary() bool {
+	return a.APIKey != ""
+}
+
+type Fallback struct {
+	Command  string        `koanf:"command"`
+	Model    string        `koanf:"model"`
+	Effort   string        `koanf:"effort"`
+	Token    string        `koanf:"token"`
+	Dir      string        `koanf:"dir"`
+	Timeout  time.Duration `koanf:"timeout"`
+	Cooldown time.Duration `koanf:"cooldown"`
+	Parallel int           `koanf:"parallel"`
+}
+
+func (f Fallback) Enabled() bool {
+	return f.Command != ""
+}
+
+type Chat struct {
+	MaxTurns      int           `koanf:"max_turns"`
+	HistoryTurns  int           `koanf:"history_turns"`
+	MaxTextLength int           `koanf:"max_text_length"`
+	MaxBodyBytes  int64         `koanf:"max_body_bytes"`
+	ReplyTimeout  time.Duration `koanf:"reply_timeout"`
+	RetentionDays int           `koanf:"retention_days"`
+}
+
+func (c Chat) Retention() time.Duration {
+	return time.Duration(c.RetentionDays) * 24 * time.Hour
+}
+
+const maxRetentionDays = 3650
+
+var (
+	fallbackEfforts      = []string{"low", "medium", "high", "xhigh", "max"}
+	telegramTokenPattern = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]{30,}$`)
+	numericIDPattern     = regexp.MustCompile(`^[1-9][0-9]{0,15}$`)
+	usernamePattern      = regexp.MustCompile(`^@?[A-Za-z][A-Za-z0-9_]{4,31}$`)
+)
 
 func Default() Config {
 	return Config{
@@ -99,9 +166,34 @@ func Default() Config {
 		},
 		Limits: Limits{
 			LeadsPerIP: Rate{Events: 5, Per: 10 * time.Minute},
+			ChatPerIP:  Rate{Events: 40, Per: 10 * time.Minute},
 		},
 		Telegram: Telegram{
-			APIURL: "https://api.telegram.org",
+			APIURL:  "https://api.telegram.org",
+			Timeout: 10 * time.Second,
+		},
+		AI: AI{
+			BaseURL:     "https://llm.rate-cloud.com/v1",
+			Model:       "qwen-3.8-max",
+			Timeout:     60 * time.Second,
+			Temperature: 0.4,
+			MaxTokens:   600,
+			Fallback: Fallback{
+				Model:    "claude-sonnet-5-5",
+				Effort:   "medium",
+				Dir:      "/var/lib/tenzo/claude",
+				Timeout:  90 * time.Second,
+				Cooldown: 3 * time.Minute,
+				Parallel: 2,
+			},
+		},
+		Chat: Chat{
+			MaxTurns:      40,
+			HistoryTurns:  30,
+			MaxTextLength: 1000,
+			MaxBodyBytes:  4096,
+			ReplyTimeout:  2 * time.Minute,
+			RetentionDays: 30,
 		},
 	}
 }
@@ -171,7 +263,12 @@ func (c *Config) normalize() {
 	c.HTTP.AllowedOrigins = compact(c.HTTP.AllowedOrigins)
 	c.HTTP.TrustedProxies = compact(c.HTTP.TrustedProxies)
 	c.Telegram.BotToken = strings.TrimSpace(c.Telegram.BotToken)
-	c.Telegram.ChatID = strings.TrimSpace(c.Telegram.ChatID)
+	c.Telegram.ChatIDs = compact(c.Telegram.ChatIDs)
+	c.Telegram.Admins = compact(c.Telegram.Admins)
+	c.AI.APIKey = strings.TrimSpace(c.AI.APIKey)
+	c.AI.BaseURL = strings.TrimRight(c.AI.BaseURL, "/")
+	c.AI.Fallback.Command = strings.TrimSpace(c.AI.Fallback.Command)
+	c.AI.Fallback.Token = strings.TrimSpace(c.AI.Fallback.Token)
 }
 
 func compact(values []string) []string {
@@ -213,8 +310,41 @@ func (c Config) Validate() error {
 
 	check(c.Limits.LeadsPerIP.Events > 0 && c.Limits.LeadsPerIP.Per > 0, "limits.leads_per_ip must have positive events and per")
 
-	check((c.Telegram.BotToken == "") == (c.Telegram.ChatID == ""), "telegram.bot_token and telegram.chat_id must be both set or both empty")
-	check(c.Telegram.BotToken == "" || isAbsoluteURL(c.Telegram.APIURL), "telegram.api_url must be an absolute http(s) url")
+	check(c.Limits.ChatPerIP.Events > 0 && c.Limits.ChatPerIP.Per > 0, "limits.chat_per_ip must have positive events and per")
+
+	if t := c.Telegram; t.Enabled() {
+		check(telegramTokenPattern.MatchString(t.BotToken), "telegram.bot_token has an invalid format")
+		check(isAbsoluteURL(t.APIURL), "telegram.api_url must be an absolute http(s) url")
+		check(t.Timeout > 0, "telegram.timeout must be positive")
+		check(len(t.ChatIDs)+len(t.Admins) > 0, "telegram.chat_ids or telegram.admins is required with telegram.bot_token")
+	}
+	for _, id := range c.Telegram.ChatIDs {
+		check(numericIDPattern.MatchString(id), "telegram.chat_ids: %q must be a numeric user id", id)
+	}
+	for _, name := range c.Telegram.Admins {
+		check(usernamePattern.MatchString(name), "telegram.admins: %q must be a telegram username", name)
+	}
+
+	check(!c.AI.Primary() || isAbsoluteURL(c.AI.BaseURL), "ai.base_url must be an absolute http(s) url")
+	check(!c.AI.Primary() || c.AI.Model != "", "ai.model is required")
+	check(c.AI.Timeout > 0, "ai.timeout must be positive")
+	check(c.AI.Temperature >= 0 && c.AI.Temperature <= 2, "ai.temperature must be between 0 and 2")
+	check(c.AI.MaxTokens >= 0, "ai.max_tokens must not be negative")
+	if f := c.AI.Fallback; f.Enabled() {
+		check(f.Model != "", "ai.fallback.model is required")
+		check(f.Effort == "" || slices.Contains(fallbackEfforts, f.Effort), "ai.fallback.effort must be one of low, medium, high, xhigh, max")
+		check(path.IsAbs(f.Dir), "ai.fallback.dir must be an absolute path")
+		check(f.Timeout > 0 && f.Timeout < c.Chat.ReplyTimeout, "ai.fallback.timeout must be positive and less than chat.reply_timeout")
+		check(f.Cooldown > 0, "ai.fallback.cooldown must be positive")
+		check(f.Parallel >= 1 && f.Parallel <= 4, "ai.fallback.parallel must be between 1 and 4")
+	}
+
+	check(c.Chat.MaxTurns >= 1, "chat.max_turns must be positive")
+	check(c.Chat.HistoryTurns >= 2, "chat.history_turns must be at least 2")
+	check(c.Chat.MaxTextLength >= 100 && c.Chat.MaxTextLength <= 4000, "chat.max_text_length must be between 100 and 4000")
+	check(c.Chat.MaxBodyBytes >= 1024, "chat.max_body_bytes must be at least 1024")
+	check(c.Chat.ReplyTimeout > c.AI.Timeout, "chat.reply_timeout must be greater than ai.timeout")
+	check(c.Chat.RetentionDays >= 1 && c.Chat.RetentionDays <= maxRetentionDays, "chat.retention_days must be between 1 and %d", maxRetentionDays)
 
 	return errors.Join(errs...)
 }

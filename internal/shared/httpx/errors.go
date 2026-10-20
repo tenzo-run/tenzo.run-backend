@@ -16,7 +16,7 @@ import (
 
 func Error(ctx context.Context, err error) error {
 	if e, ok := apperr.As(err); ok {
-		return huma.NewError(status(e.Kind), e.Message)
+		return huma.NewError(Status(e.Kind), e.Message)
 	}
 
 	if errors.Is(err, context.Canceled) {
@@ -36,7 +36,7 @@ func TooManyRequests(retryAfter time.Duration) error {
 	)
 }
 
-func status(kind apperr.Kind) int {
+func Status(kind apperr.Kind) int {
 	switch kind {
 	case apperr.KindInvalid:
 		return http.StatusUnprocessableEntity

@@ -22,6 +22,7 @@ const (
 	testOrigin      = "http://localhost:3000"
 	testBotToken    = "test-bot-token"
 	testChatID      = "42"
+	testChatNumber  = 42
 	deliveryTimeout = 5 * time.Second
 )
 
@@ -70,13 +71,13 @@ func startServer(t *testing.T, options ...func(*config.Config)) *testServer {
 	cfg.HTTP.Docs = true
 	cfg.Database.URL = dbURL
 	cfg.Limits.LeadsPerIP = config.Rate{Events: 100, Per: time.Minute}
-	cfg.Telegram = config.Telegram{APIURL: bot.URL, BotToken: testBotToken, ChatID: testChatID}
+	cfg.Telegram = config.Telegram{APIURL: bot.URL, BotToken: testBotToken, ChatIDs: []string{testChatID}, Timeout: time.Second}
 	for _, option := range options {
 		option(&cfg)
 	}
 
 	svc := newServices(cfg, pool, log)
-	go svc.telegram.Run(ctx)
+	go svc.relay.Run(ctx)
 	handler, err := newRouter(cfg, log, pool, svc)
 	if err != nil {
 		t.Fatal(err)
@@ -93,12 +94,13 @@ func fakeTelegram(t *testing.T, messages chan<- string) http.Handler {
 			t.Errorf("telegram path = %s", r.URL.Path)
 		}
 		var m struct {
-			ChatID string `json:"chat_id"`
+			ChatID int64  `json:"chat_id"`
 			Text   string `json:"text"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil || m.ChatID != testChatID {
+		if err := json.NewDecoder(r.Body).Decode(&m); err != nil || m.ChatID != testChatNumber {
 			t.Errorf("telegram message = %+v, %v", m, err)
 		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
 		messages <- m.Text
 	})
 }

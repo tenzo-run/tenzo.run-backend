@@ -33,8 +33,39 @@ limits:
   leads_per_ip:
     events: 5
     per: 10m
+  chat_per_ip:
+    events: 40
+    per: 10m
 
 telegram:
   api_url: "https://api.telegram.org"
   bot_token: ""
-  chat_id: ""
+  chat_ids: []
+  admins:
+    - "tenzo_run"
+  timeout: 10s
+
+ai:
+  base_url: "https://llm.rate-cloud.com/v1"
+  api_key: ""
+  model: "qwen-3.8-max"
+  timeout: 60s
+  temperature: 0.4
+  max_tokens: 600
+  fallback:
+    command: ""
+    model: "claude-sonnet-5-5"
+    effort: "medium"
+    token: ""
+    dir: "/var/lib/tenzo/claude"
+    timeout: 90s
+    cooldown: 3m
+    parallel: 2
+
+chat:
+  max_turns: 40
+  history_turns: 30
+  max_text_length: 1000
+  max_body_bytes: 4096
+  reply_timeout: 2m
+  retention_days: 30

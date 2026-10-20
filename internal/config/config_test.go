@@ -25,6 +25,8 @@ func violations(err error) []error {
 	return []error{err}
 }
 
+const testToken = "123:AAH0123456789abcdefghijklmnopqrstuv"
+
 func TestValidateAcceptsCompleteConfig(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -34,7 +36,10 @@ func TestValidateAcceptsCompleteConfig(t *testing.T) {
 		{"development with text logs", func(c *Config) { c.Env, c.Log.Level, c.Log.Format = "development", "debug", "text" }},
 		{"allowed origins", func(c *Config) { c.HTTP.AllowedOrigins = []string{"https://tenzo.run", "http://localhost:3000"} }},
 		{"no idle database connections", func(c *Config) { c.Database.MinConns = 0 }},
-		{"telegram notifications", func(c *Config) { c.Telegram.BotToken, c.Telegram.ChatID = "123:abc", "42" }},
+		{"telegram admin by id", func(c *Config) { c.Telegram.BotToken, c.Telegram.ChatIDs = testToken, []string{"42"} }},
+		{"telegram admin by username", func(c *Config) { c.Telegram.BotToken, c.Telegram.Admins = testToken, []string{"@tenzo_run"} }},
+		{"chat with primary model", func(c *Config) { c.AI.APIKey = "key" }},
+		{"chat with backup model only", func(c *Config) { c.AI.Fallback.Command = "/usr/bin/claude" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,11 +75,27 @@ func TestValidateRejectsEachInvalidField(t *testing.T) {
 		{"no statement timeout", func(c *Config) { c.Database.StatementTimeout = 0 }, "database.statement_timeout"},
 		{"no leads per ip", func(c *Config) { c.Limits.LeadsPerIP.Events = 0 }, "limits.leads_per_ip"},
 		{"no leads window", func(c *Config) { c.Limits.LeadsPerIP.Per = 0 }, "limits.leads_per_ip"},
-		{"telegram token without chat", func(c *Config) { c.Telegram.BotToken = "123:abc" }, "telegram.bot_token"},
-		{"telegram chat without token", func(c *Config) { c.Telegram.ChatID = "42" }, "telegram.bot_token"},
+		{"no chat per ip", func(c *Config) { c.Limits.ChatPerIP.Events = 0 }, "limits.chat_per_ip"},
+		{"telegram token without admins", func(c *Config) { c.Telegram.BotToken = testToken }, "telegram.chat_ids or telegram.admins"},
+		{"telegram malformed token", func(c *Config) { c.Telegram.BotToken, c.Telegram.ChatIDs = "123:abc", []string{"42"} }, "telegram.bot_token"},
 		{"telegram relative api url", func(c *Config) {
-			c.Telegram.BotToken, c.Telegram.ChatID, c.Telegram.APIURL = "123:abc", "42", "api.telegram.org"
+			c.Telegram.BotToken, c.Telegram.ChatIDs, c.Telegram.APIURL = testToken, []string{"42"}, "api.telegram.org"
 		}, "telegram.api_url"},
+		{"telegram chat id is not numeric", func(c *Config) { c.Telegram.ChatIDs = []string{"@channel"} }, "telegram.chat_ids"},
+		{"telegram admin is not a username", func(c *Config) { c.Telegram.Admins = []string{"ab"} }, "telegram.admins"},
+		{"ai relative base url", func(c *Config) { c.AI.APIKey, c.AI.BaseURL = "key", "llm.local" }, "ai.base_url"},
+		{"ai without model", func(c *Config) { c.AI.APIKey, c.AI.Model = "key", "" }, "ai.model"},
+		{"ai hot temperature", func(c *Config) { c.AI.Temperature = 3 }, "ai.temperature"},
+		{"backup relative dir", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Dir = "claude", "claude" }, "ai.fallback.dir"},
+		{"backup unknown effort", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Effort = "claude", "huge" }, "ai.fallback.effort"},
+		{"backup slower than reply", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Timeout = "claude", 5*time.Minute }, "ai.fallback.timeout"},
+		{"backup too parallel", func(c *Config) { c.AI.Fallback.Command, c.AI.Fallback.Parallel = "claude", 9 }, "ai.fallback.parallel"},
+		{"no chat turns", func(c *Config) { c.Chat.MaxTurns = 0 }, "chat.max_turns"},
+		{"short chat history", func(c *Config) { c.Chat.HistoryTurns = 1 }, "chat.history_turns"},
+		{"tiny chat message", func(c *Config) { c.Chat.MaxTextLength = 10 }, "chat.max_text_length"},
+		{"tiny chat body", func(c *Config) { c.Chat.MaxBodyBytes = 100 }, "chat.max_body_bytes"},
+		{"reply faster than model", func(c *Config) { c.Chat.ReplyTimeout = c.AI.Timeout }, "chat.reply_timeout"},
+		{"no chat retention", func(c *Config) { c.Chat.RetentionDays = 0 }, "chat.retention_days"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,7 +123,8 @@ func TestNormalize(t *testing.T) {
 	c.HTTP.PublicURL = "https://api.tenzo.run/"
 	c.HTTP.AllowedOrigins = []string{" https://tenzo.run ", "", "  ", "http://localhost:3000"}
 	c.HTTP.TrustedProxies = []string{"10.0.0.0/8 ", ""}
-	c.Telegram.BotToken, c.Telegram.ChatID = " 123:abc ", " 42\n"
+	c.Telegram.BotToken, c.Telegram.ChatIDs, c.Telegram.Admins = " 123:abc ", []string{" 42\n", ""}, []string{" @tenzo_run "}
+	c.AI.APIKey, c.AI.BaseURL = " key ", "https://llm.local/v1/"
 
 	c.normalize()
 
@@ -115,8 +137,12 @@ func TestNormalize(t *testing.T) {
 	if !slices.Equal(c.HTTP.TrustedProxies, []string{"10.0.0.0/8"}) {
 		t.Errorf("proxies = %q", c.HTTP.TrustedProxies)
 	}
-	if c.Telegram.BotToken != "123:abc" || c.Telegram.ChatID != "42" {
-		t.Errorf("telegram = %q, %q", c.Telegram.BotToken, c.Telegram.ChatID)
+	if c.Telegram.BotToken != "123:abc" || !slices.Equal(c.Telegram.ChatIDs, []string{"42"}) ||
+		!slices.Equal(c.Telegram.Admins, []string{"@tenzo_run"}) {
+		t.Errorf("telegram = %+v", c.Telegram)
+	}
+	if c.AI.APIKey != "key" || c.AI.BaseURL != "https://llm.local/v1" {
+		t.Errorf("ai = %+v", c.AI)
 	}
 }
 
@@ -149,8 +175,9 @@ func TestLoadMergesFileAndEnv(t *testing.T) {
 	}
 	t.Setenv("TENZO_DATABASE__URL", "postgres://env")
 	t.Setenv("TENZO_HTTP__ALLOWED_ORIGINS", "https://tenzo.run,https://www.tenzo.run")
-	t.Setenv("TENZO_TELEGRAM__BOT_TOKEN", "123:abc")
-	t.Setenv("TENZO_TELEGRAM__CHAT_ID", "42")
+	t.Setenv("TENZO_TELEGRAM__BOT_TOKEN", testToken)
+	t.Setenv("TENZO_TELEGRAM__ADMINS", "tenzo_run,@second_admin")
+	t.Setenv("TENZO_AI__API_KEY", "key")
 
 	c, err := Load(path, true)
 	if err != nil {
@@ -166,7 +193,8 @@ func TestLoadMergesFileAndEnv(t *testing.T) {
 	if c.Limits.LeadsPerIP != (Rate{Events: 3, Per: time.Minute}) {
 		t.Errorf("leads per ip = %+v", c.Limits.LeadsPerIP)
 	}
-	if c.Telegram.BotToken != "123:abc" || c.Telegram.ChatID != "42" || c.HTTP.ReadTimeout != Default().HTTP.ReadTimeout {
+	if c.Telegram.BotToken != testToken || !slices.Equal(c.Telegram.Admins, []string{"tenzo_run", "@second_admin"}) ||
+		!c.AI.Enabled() || c.HTTP.ReadTimeout != Default().HTTP.ReadTimeout {
 		t.Errorf("config = %+v", c)
 	}
 }
@@ -185,9 +213,9 @@ func TestLoadRequiresExplicitFile(t *testing.T) {
 
 func TestLoadRejectsInvalidConfig(t *testing.T) {
 	t.Setenv("TENZO_DATABASE__URL", "postgres://env")
-	t.Setenv("TENZO_TELEGRAM__BOT_TOKEN", "123:abc")
+	t.Setenv("TENZO_TELEGRAM__BOT_TOKEN", testToken)
 
-	if _, err := Load("", false); err == nil || !strings.Contains(err.Error(), "telegram.bot_token") {
+	if _, err := Load("", false); err == nil || !strings.Contains(err.Error(), "telegram.chat_ids or telegram.admins") {
 		t.Fatalf("error = %v", err)
 	}
 }

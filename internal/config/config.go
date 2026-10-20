@@ -112,6 +112,7 @@ type Fallback struct {
 	Token    string        `koanf:"token"`
 	Dir      string        `koanf:"dir"`
 	Timeout  time.Duration `koanf:"timeout"`
+	Hedge    time.Duration `koanf:"hedge_after"`
 	Check    time.Duration `koanf:"check_interval"`
 	Parallel int           `koanf:"parallel"`
 }
@@ -185,6 +186,7 @@ func Default() Config {
 				Effort:   "medium",
 				Dir:      "/var/lib/tenzo/claude",
 				Timeout:  90 * time.Second,
+				Hedge:    8 * time.Second,
 				Check:    20 * time.Second,
 				Parallel: 2,
 			},
@@ -339,6 +341,7 @@ func (c Config) Validate() error {
 		check(f.Effort == "" || slices.Contains(fallbackEfforts, f.Effort), "ai.fallback.effort must be one of low, medium, high, xhigh, max")
 		check(path.IsAbs(f.Dir), "ai.fallback.dir must be an absolute path")
 		check(f.Timeout > 0, "ai.fallback.timeout must be positive")
+		check(f.Hedge > 0 && f.Hedge < c.AI.Timeout, "ai.fallback.hedge_after must be positive and less than ai.timeout")
 		check(f.Check >= time.Second, "ai.fallback.check_interval must be at least 1s")
 		check(c.AI.Timeout+f.Timeout <= c.Chat.ReplyTimeout, "ai.timeout plus ai.fallback.timeout must fit into chat.reply_timeout")
 		check(f.Parallel >= 1 && f.Parallel <= 4, "ai.fallback.parallel must be between 1 and 4")

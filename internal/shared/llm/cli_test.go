@@ -141,13 +141,21 @@ func TestEnvDoesNotLeakServiceSecrets(t *testing.T) {
 
 type scripted struct {
 	mu     sync.Mutex
+	delay  time.Duration
 	calls  int
 	deltas []string
 	res    Result
 	err    error
 }
 
-func (s *scripted) Stream(_ context.Context, _ Request, onDelta func(string)) (Result, error) {
+func (s *scripted) Stream(ctx context.Context, _ Request, onDelta func(string)) (Result, error) {
+	if s.delay > 0 {
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-time.After(s.delay):
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -158,7 +166,7 @@ func (s *scripted) Stream(_ context.Context, _ Request, onDelta func(string)) (R
 }
 
 func newTestFallback(primary, backup Streamer) *Fallback {
-	return NewFallback(primary, backup, 10*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewFallback(primary, backup, 200*time.Millisecond, 10*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func TestFallbackSwitchesToBackupAndComesBack(t *testing.T) {
@@ -195,6 +203,83 @@ func TestFallbackSwitchesToBackupAndComesBack(t *testing.T) {
 
 	if res, _ := f.Stream(t.Context(), Request{}, func(string) {}); res.Content != "снова" || backup.calls != 2 {
 		t.Fatalf("recovered: %+v, backup calls %d", res, backup.calls)
+	}
+}
+
+func TestFallbackHedgesASlowPrimary(t *testing.T) {
+	primary := &scripted{delay: 2 * time.Second, res: Result{Content: "qwen"}}
+	backup := &scripted{deltas: []string{"claude"}, res: Result{Content: "claude"}}
+	f := newTestFallback(primary, backup)
+
+	started := time.Now()
+	var got strings.Builder
+	res, err := f.Stream(t.Context(), Request{}, func(d string) { got.WriteString(d) })
+	if err != nil || res.Content != "claude" || got.String() != "claude" {
+		t.Fatalf("res = %+v, streamed %q, %v", res, got.String(), err)
+	}
+	if took := time.Since(started); took > time.Second {
+		t.Fatalf("hedged answer took %s", took)
+	}
+	if !f.isDown() {
+		t.Fatal("a slow primary must route the next messages to the backup")
+	}
+}
+
+func TestFallbackKeepsAFastPrimary(t *testing.T) {
+	primary := &scripted{delay: 20 * time.Millisecond, deltas: []string{"qwen"}, res: Result{Content: "qwen"}}
+	backup := &scripted{res: Result{Content: "claude"}}
+	f := newTestFallback(primary, backup)
+
+	for range 3 {
+		if res, err := f.Stream(t.Context(), Request{}, func(string) {}); err != nil || res.Content != "qwen" {
+			t.Fatalf("res = %+v, %v", res, err)
+		}
+	}
+	if backup.calls != 0 || f.isDown() {
+		t.Fatalf("backup calls %d, down %v", backup.calls, f.isDown())
+	}
+}
+
+func TestFallbackReportsBothFailures(t *testing.T) {
+	f := newTestFallback(&scripted{err: errors.New("503")}, &scripted{err: errors.New("limit")})
+	if _, err := f.Stream(t.Context(), Request{}, func(string) {}); err == nil || !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestFallbackStaysOnBackupUntilPrimaryIsStable(t *testing.T) {
+	primary := &scripted{err: errors.New("timeout")}
+	backup := &scripted{res: Result{Content: "claude"}}
+	f := newTestFallback(primary, backup)
+	if _, err := f.Stream(t.Context(), Request{}, func(string) {}); err != nil || !f.isDown() {
+		t.Fatalf("down = %v, %v", f.isDown(), err)
+	}
+
+	primary.mu.Lock()
+	primary.err, primary.res = nil, Result{Content: "ok"}
+	primary.mu.Unlock()
+	for i := 1; i < recoverAfter; i++ {
+		f.recheck(t.Context())
+		if !f.isDown() {
+			t.Fatalf("recovered after %d good probes, want %d", i, recoverAfter)
+		}
+	}
+	primary.mu.Lock()
+	primary.err = errors.New("flaky")
+	primary.mu.Unlock()
+	f.recheck(t.Context())
+	primary.mu.Lock()
+	primary.err = nil
+	primary.mu.Unlock()
+	for i := 1; i < recoverAfter; i++ {
+		f.recheck(t.Context())
+	}
+	if !f.isDown() {
+		t.Fatal("a failed probe must reset the streak")
+	}
+	f.recheck(t.Context())
+	if f.isDown() {
+		t.Fatal("primary must come back after a stable streak")
 	}
 }
 
@@ -286,7 +371,7 @@ func TestFallbackReachesInstalledClaude(t *testing.T) {
 	}
 	primary := New(Settings{BaseURL: "http://127.0.0.1:9/v1", APIKey: "x", Model: "qwen", Timeout: 5 * time.Second})
 	backup := NewCLI(CLISettings{Command: bin, Model: "claude-sonnet-5-5", Effort: "medium", Dir: os.Getenv("TENZO_TEST_CLAUDE_DIR"), Timeout: 90 * time.Second, Parallel: 2})
-	f := NewFallback(primary, backup, time.Minute, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	f := NewFallback(primary, backup, 8*time.Second, time.Minute, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	started := time.Now()
 	var streamed strings.Builder

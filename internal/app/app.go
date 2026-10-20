@@ -115,7 +115,7 @@ func newModel(ai config.AI, log *slog.Logger) (llm.Streamer, *llm.Fallback) {
 	if primary == nil {
 		return backup, nil
 	}
-	fallback := llm.NewFallback(primary, backup, f.Check, log)
+	fallback := llm.NewFallback(primary, backup, f.Hedge, f.Check, log)
 	return fallback, fallback
 }
 

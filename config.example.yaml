@@ -61,6 +61,7 @@ ai:
     token: ""
     dir: "/var/lib/tenzo/claude"
     timeout: 90s
+    hedge_after: 8s
     check_interval: 20s
     parallel: 2
 

@@ -94,7 +94,7 @@ func TestQuickReplyFallsBackToRussian(t *testing.T) {
 }
 
 func TestAdminsAllowByIDOrUsername(t *testing.T) {
-	a := NewAdmins(nil, []string{"42", "x", "42"}, []string{"@Tenzo_Run", " "})
+	a := NewAdmins(nil, []string{"42", "x", "42"}, []string{"@Tenzo_Run", " "}, "")
 	cases := []struct {
 		user telegram.User
 		want bool

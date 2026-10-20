@@ -75,11 +75,12 @@ type Rate struct {
 }
 
 type Telegram struct {
-	APIURL   string        `koanf:"api_url"`
-	BotToken string        `koanf:"bot_token"`
-	ChatIDs  []string      `koanf:"chat_ids"`
-	Admins   []string      `koanf:"admins"`
-	Timeout  time.Duration `koanf:"timeout"`
+	APIURL    string        `koanf:"api_url"`
+	BotToken  string        `koanf:"bot_token"`
+	ChatIDs   []string      `koanf:"chat_ids"`
+	Admins    []string      `koanf:"admins"`
+	ClaimCode string        `koanf:"claim_code"`
+	Timeout   time.Duration `koanf:"timeout"`
 }
 
 func (t Telegram) Enabled() bool {
@@ -139,6 +140,7 @@ var (
 	telegramTokenPattern = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]{30,}$`)
 	numericIDPattern     = regexp.MustCompile(`^[1-9][0-9]{0,15}$`)
 	usernamePattern      = regexp.MustCompile(`^@?[A-Za-z][A-Za-z0-9_]{4,31}$`)
+	claimCodePattern     = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
 )
 
 func Default() Config {
@@ -265,6 +267,7 @@ func (c *Config) normalize() {
 	c.Telegram.BotToken = strings.TrimSpace(c.Telegram.BotToken)
 	c.Telegram.ChatIDs = compact(c.Telegram.ChatIDs)
 	c.Telegram.Admins = compact(c.Telegram.Admins)
+	c.Telegram.ClaimCode = strings.TrimSpace(c.Telegram.ClaimCode)
 	c.AI.APIKey = strings.TrimSpace(c.AI.APIKey)
 	c.AI.BaseURL = strings.TrimRight(c.AI.BaseURL, "/")
 	c.AI.Fallback.Command = strings.TrimSpace(c.AI.Fallback.Command)
@@ -316,7 +319,8 @@ func (c Config) Validate() error {
 		check(telegramTokenPattern.MatchString(t.BotToken), "telegram.bot_token has an invalid format")
 		check(isAbsoluteURL(t.APIURL), "telegram.api_url must be an absolute http(s) url")
 		check(t.Timeout > 0, "telegram.timeout must be positive")
-		check(len(t.ChatIDs)+len(t.Admins) > 0, "telegram.chat_ids or telegram.admins is required with telegram.bot_token")
+		check(len(t.ChatIDs)+len(t.Admins) > 0 || t.ClaimCode != "", "telegram.chat_ids, telegram.admins or telegram.claim_code is required with telegram.bot_token")
+		check(t.ClaimCode == "" || claimCodePattern.MatchString(t.ClaimCode), "telegram.claim_code must be 16-64 letters, digits, _ or -")
 	}
 	for _, id := range c.Telegram.ChatIDs {
 		check(numericIDPattern.MatchString(id), "telegram.chat_ids: %q must be a numeric user id", id)

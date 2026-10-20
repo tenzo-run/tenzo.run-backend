@@ -21,6 +21,8 @@ const (
 	modelReply    = "Лендинг от 250 000 ₸, от 7 дней. Для какого бизнеса сайт?"
 	waitStep      = 20 * time.Millisecond
 	fakePollDelay = 100 * time.Millisecond
+	testClaimCode = "owner-claim-code-0123456789"
+	secondOwnerID = 6001
 )
 
 type sentMessage struct {
@@ -154,7 +156,9 @@ func startChatServer(t *testing.T) (*testServer, *fakeBot) {
 	t.Cleanup(model.Close)
 
 	s := startServer(t, func(c *config.Config) {
-		c.Telegram = config.Telegram{APIURL: tg.URL, BotToken: testBotToken, Admins: []string{"tenzo_run"}, Timeout: time.Second}
+		c.Telegram = config.Telegram{
+			APIURL: tg.URL, BotToken: testBotToken, Admins: []string{"tenzo_run"}, ClaimCode: testClaimCode, Timeout: time.Second,
+		}
 		c.AI.BaseURL, c.AI.APIKey = model.URL+"/v1", "test-key"
 	})
 	go s.svc.bot.Run(t.Context())
@@ -315,4 +319,25 @@ func TestChatRejectsBadRequests(t *testing.T) {
 func TestChatDisabledWithoutModel(t *testing.T) {
 	s := startServer(t)
 	s.expect(request{method: "POST", path: "/api/v1/chat", body: map[string]string{"text": "hi"}, header: http.Header{"Origin": {testOrigin}}}, 503, nil)
+}
+
+func TestOwnerClaimsBotWithStartCode(t *testing.T) {
+	s, bot := startChatServer(t)
+
+	stranger := map[string]any{"id": secondOwnerID, "first_name": "Санжар", "username": "sanzhar_personal"}
+	chatOf := map[string]any{"id": secondOwnerID, "type": "private"}
+	bot.push(map[string]any{"message": map[string]any{"message_id": 1, "text": "/start wrong-code-0000000000", "from": stranger, "chat": chatOf}})
+	bot.waitFor(func(m sentMessage) bool {
+		return m.ChatID == secondOwnerID && strings.Contains(m.Text, "ИИ-ассистент Tenzo")
+	})
+
+	bot.push(map[string]any{"message": map[string]any{"message_id": 2, "text": "/start " + testClaimCode, "from": stranger, "chat": chatOf}})
+	bot.waitFor(func(m sentMessage) bool {
+		return m.ChatID == secondOwnerID && strings.Contains(m.Text, "теперь владелец")
+	})
+
+	s.chat(map[string]any{"text": "Нужен сайт", "locale": "ru", "page": "/ru"})
+	bot.waitFor(func(m sentMessage) bool {
+		return m.Method == "editMessageText" && m.ChatID == secondOwnerID && strings.Contains(m.Text, "Нужен сайт")
+	})
 }

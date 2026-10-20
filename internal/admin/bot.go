@@ -124,6 +124,23 @@ func (b *Bot) process(ctx context.Context, u telegram.Update) {
 		return
 	}
 
+	if m := u.Message; m != nil && m.From != nil && m.Chat.Type == "private" {
+		if code, ok := strings.CutPrefix(strings.TrimSpace(m.Text), commandStart+" "); ok {
+			claimed, err := b.admins.Claim(hctx, *m.From, code)
+			if err != nil {
+				b.log.ErrorContext(hctx, "claim admin failed", slog.Any("error", err))
+			}
+			if claimed {
+				defer cancel()
+				b.guard(hctx, u.UpdateID, func() error {
+					_, err := b.api.Send(hctx, m.Chat.ID, telegram.Outgoing{Text: claimedText + "\n\n" + welcomeText, HTML: true})
+					return err
+				})
+				return
+			}
+		}
+	}
+
 	if m := u.Message; m != nil && m.From != nil && m.Chat.Type == "private" && !b.admin(hctx, *m.From) {
 		select {
 		case b.slots <- struct{}{}:
@@ -278,7 +295,7 @@ func (b *Bot) typing(ctx context.Context, chatID int64) func() {
 }
 
 func (b *Bot) onCallback(ctx context.Context, q telegram.CallbackQuery) error {
-	if !b.admins.Allowed(q.From) {
+	if !b.admin(ctx, q.From) {
 		return b.api.Answer(ctx, q.ID, "Нет доступа")
 	}
 	action, raw, ok := parseCallback(q.Data)
@@ -397,6 +414,8 @@ func sleep(ctx context.Context, d time.Duration) {
 	case <-t.C:
 	}
 }
+
+const claimedText = "✅ Готово: этот аккаунт теперь владелец бота. Сюда будут приходить все обращения с сайта и из бота."
 
 const welcomeText = `<b>Бот tenzo.run</b>
 

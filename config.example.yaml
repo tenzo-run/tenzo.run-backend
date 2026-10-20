@@ -43,6 +43,8 @@ telegram:
   chat_ids: []
   admins:
     - "tenzo_run"
+    - "tenzo_dev"
+  claim_code: ""
   timeout: 10s
 
 ai:

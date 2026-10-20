@@ -21,6 +21,7 @@ func NewRepository(db postgres.DB) *Repository {
 type knownAdmin struct {
 	ID       int64
 	Username string
+	Claimed  bool
 }
 
 func (r *Repository) remember(ctx context.Context, sessionID int64, posted []chat.Posted, at time.Time) error {
@@ -73,7 +74,7 @@ func (r *Repository) purgeUpdates(ctx context.Context, before time.Time) error {
 }
 
 func (r *Repository) admins(ctx context.Context) ([]knownAdmin, error) {
-	rows, err := r.db.Query(ctx, `select user_id, username from bot_admins order by created_at`)
+	rows, err := r.db.Query(ctx, `select user_id, username, claimed from bot_admins order by created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,7 @@ func (r *Repository) admins(ctx context.Context) ([]knownAdmin, error) {
 	var out []knownAdmin
 	for rows.Next() {
 		var a knownAdmin
-		if err := rows.Scan(&a.ID, &a.Username); err != nil {
+		if err := rows.Scan(&a.ID, &a.Username, &a.Claimed); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -90,11 +91,12 @@ func (r *Repository) admins(ctx context.Context) ([]knownAdmin, error) {
 	return out, rows.Err()
 }
 
-func (r *Repository) saveAdmin(ctx context.Context, id int64, username, name string, at time.Time) error {
+func (r *Repository) saveAdmin(ctx context.Context, id int64, username, name string, claimed bool, at time.Time) error {
 	_, err := r.db.Exec(ctx, `
-		insert into bot_admins (user_id, username, name, created_at) values ($1, $2, $3, $4)
-		on conflict (user_id) do update set username = excluded.username, name = excluded.name`,
-		id, username, name, at)
+		insert into bot_admins (user_id, username, name, claimed, created_at) values ($1, $2, $3, $4, $5)
+		on conflict (user_id) do update
+		set username = excluded.username, name = excluded.name, claimed = bot_admins.claimed or excluded.claimed`,
+		id, username, name, claimed, at)
 	return err
 }
 

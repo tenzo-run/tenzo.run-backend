@@ -37,6 +37,7 @@ func TestValidateAcceptsCompleteConfig(t *testing.T) {
 		{"allowed origins", func(c *Config) { c.HTTP.AllowedOrigins = []string{"https://tenzo.run", "http://localhost:3000"} }},
 		{"no idle database connections", func(c *Config) { c.Database.MinConns = 0 }},
 		{"telegram admin by id", func(c *Config) { c.Telegram.BotToken, c.Telegram.ChatIDs = testToken, []string{"42"} }},
+		{"telegram admin by claim code", func(c *Config) { c.Telegram.BotToken, c.Telegram.ClaimCode = testToken, "owner-claim-code-0123456789" }},
 		{"telegram admin by username", func(c *Config) { c.Telegram.BotToken, c.Telegram.Admins = testToken, []string{"@tenzo_run"} }},
 		{"chat with primary model", func(c *Config) { c.AI.APIKey = "key" }},
 		{"chat with backup model only", func(c *Config) { c.AI.Fallback.Command = "/usr/bin/claude" }},
@@ -76,7 +77,8 @@ func TestValidateRejectsEachInvalidField(t *testing.T) {
 		{"no leads per ip", func(c *Config) { c.Limits.LeadsPerIP.Events = 0 }, "limits.leads_per_ip"},
 		{"no leads window", func(c *Config) { c.Limits.LeadsPerIP.Per = 0 }, "limits.leads_per_ip"},
 		{"no chat per ip", func(c *Config) { c.Limits.ChatPerIP.Events = 0 }, "limits.chat_per_ip"},
-		{"telegram token without admins", func(c *Config) { c.Telegram.BotToken = testToken }, "telegram.chat_ids or telegram.admins"},
+		{"telegram token without admins", func(c *Config) { c.Telegram.BotToken = testToken }, "telegram.chat_ids, telegram.admins or telegram.claim_code"},
+		{"telegram short claim code", func(c *Config) { c.Telegram.BotToken, c.Telegram.ClaimCode = testToken, "short" }, "telegram.claim_code"},
 		{"telegram malformed token", func(c *Config) { c.Telegram.BotToken, c.Telegram.ChatIDs = "123:abc", []string{"42"} }, "telegram.bot_token"},
 		{"telegram relative api url", func(c *Config) {
 			c.Telegram.BotToken, c.Telegram.ChatIDs, c.Telegram.APIURL = testToken, []string{"42"}, "api.telegram.org"
@@ -215,7 +217,7 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 	t.Setenv("TENZO_DATABASE__URL", "postgres://env")
 	t.Setenv("TENZO_TELEGRAM__BOT_TOKEN", testToken)
 
-	if _, err := Load("", false); err == nil || !strings.Contains(err.Error(), "telegram.chat_ids or telegram.admins") {
+	if _, err := Load("", false); err == nil || !strings.Contains(err.Error(), "telegram.chat_ids, telegram.admins or telegram.claim_code") {
 		t.Fatalf("error = %v", err)
 	}
 }

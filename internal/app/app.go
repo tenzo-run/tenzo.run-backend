@@ -62,7 +62,7 @@ func newServices(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) *servi
 	if tg := cfg.Telegram; tg.Enabled() {
 		api = telegram.NewBot(tg.APIURL, tg.BotToken, tg.Timeout, botPollTimeout)
 		repo = admin.NewRepository(pool)
-		admins = admin.NewAdmins(repo, tg.ChatIDs, tg.Admins)
+		admins = admin.NewAdmins(repo, tg.ChatIDs, tg.Admins, tg.ClaimCode)
 		svc.relay = admin.NewRelay(api, repo, admins, log)
 		chatRel, notify = svc.relay, svc.relay
 	}

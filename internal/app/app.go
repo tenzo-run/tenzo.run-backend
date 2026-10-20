@@ -178,5 +178,11 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	g.Go(func() error { return httpx.Serve(gctx, srv, cfg.HTTP.ShutdownTimeout, log) })
 	svc.background(gctx, g)
 
-	return g.Wait()
+	err = g.Wait()
+	if svc.chat != nil {
+		wctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+		svc.chat.Wait(wctx)
+		cancel()
+	}
+	return err
 }

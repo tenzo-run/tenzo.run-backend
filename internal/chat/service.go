@@ -23,6 +23,7 @@ const (
 	newContactGap = 12 * time.Hour
 	lockPoll      = 200 * time.Millisecond
 	lockWait      = 2 * time.Minute
+	replyWait     = 90 * time.Second
 )
 
 type Store interface {
@@ -67,6 +68,7 @@ type Service struct {
 	rules    Rules
 	settings Settings
 	busy     sync.Map
+	jobs     sync.WaitGroup
 	now      func() time.Time
 	newID    func() (uuid.UUID, error)
 }
@@ -87,10 +89,24 @@ func (s *Service) Reply(ctx context.Context, in Input, out Emitter) error {
 	if err != nil {
 		return err
 	}
-	if _, taken := s.busy.LoadOrStore(sess.PublicID, struct{}{}); taken {
-		return ErrBusy
+	unlock, err := s.lock(ctx, sess.PublicID, replyWait)
+	if err != nil {
+		return err
 	}
-	defer s.busy.Delete(sess.PublicID)
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			unlock()
+		}
+	}()
+	if sess.ID != 0 {
+		fresh, err := s.store.find(ctx, sess.PublicID)
+		if err != nil {
+			return fmt.Errorf("find chat: %w", err)
+		}
+		fresh.Profile = sess.Profile
+		sess = &fresh
+	}
 
 	if sess.UserTurns() >= s.settings.MaxTurns {
 		return ErrTooLong
@@ -116,44 +132,57 @@ func (s *Service) Reply(ctx context.Context, in Input, out Emitter) error {
 		out.Lead(sess.Lead)
 	}
 
-	log := logger.From(ctx)
-	ticket := s.announce(ctx, Notice{Session: snapshot(sess), Returning: returning, NewContact: sess.newContact, Text: in.Text}, log)
+	ticket := s.announce(ctx, Notice{Session: snapshot(sess), Returning: returning, NewContact: sess.newContact, Text: in.Text}, logger.From(ctx))
 
-	extracted := s.extract(context.WithoutCancel(ctx), snapshot(sess))
 	reply, answerErr := s.answer(ctx, sess, out)
 	if reply != "" {
 		sess.Turns = append(sess.Turns, Turn{Role: RoleAssistant, Text: reply, At: s.clock()})
 	}
+	sess.UpdatedAt = s.clock()
+	if err := s.persist(ctx, sess); err != nil {
+		return err
+	}
 
-	escalated := false
+	handedOff = true
+	s.jobs.Add(1)
+	go func() {
+		defer s.jobs.Done()
+		defer unlock()
+		s.followUp(context.WithoutCancel(ctx), sess, ticket, Notice{Returning: returning, Text: in.Text, Reply: reply})
+	}()
+	return answerErr
+}
+
+func (s *Service) followUp(ctx context.Context, sess *Session, ticket <-chan Ticket, n Notice) {
+	log := logger.From(ctx)
 	contact := sess.Lead.Contact
-	if calls := <-extracted; len(calls) > 0 {
-		changed := false
-		for _, call := range calls {
-			res := apply(&sess.Lead, call)
-			changed = changed || res.changed
-			if q := res.question; q != "" && q != sess.Question {
-				sess.Question, sess.Waiting, escalated = q, true, true
-			}
-		}
-		if changed {
-			out.Lead(sess.Lead)
+	for _, call := range s.extract(ctx, snapshot(sess)) {
+		res := apply(&sess.Lead, call)
+		if q := res.question; q != "" && q != sess.Question {
+			sess.Question, sess.Waiting, n.Escalated = q, true, true
 		}
 	}
 	if sess.Lead.Contact != contact {
 		sess.newContact = true
 	}
+	n.Session, n.NewContact = snapshot(sess), sess.newContact
+	s.finish(ctx, ticket, n, log)
 
-	s.finish(ctx, ticket, Notice{
-		Session: snapshot(sess), Returning: returning, NewContact: sess.newContact, Text: in.Text, Reply: reply,
-		Escalated: escalated,
-	}, log)
-
-	sess.UpdatedAt = s.clock()
 	if err := s.persist(ctx, sess); err != nil {
-		return err
+		log.ErrorContext(ctx, "save chat lead failed", slog.Any("error", err))
 	}
-	return answerErr
+}
+
+func (s *Service) Wait(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		s.jobs.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 func (s *Service) Restart(ctx context.Context, telegramID int64, profile, contact, locale string) (Session, error) {
@@ -187,7 +216,7 @@ func (s *Service) AdminSay(ctx context.Context, id uuid.UUID, text string) (Sess
 		return Session{}, ErrLongText
 	}
 
-	unlock, err := s.lock(ctx, id)
+	unlock, err := s.lock(ctx, id, lockWait)
 	if err != nil {
 		return Session{}, err
 	}
@@ -263,8 +292,8 @@ func (s *Service) Purge(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-func (s *Service) lock(ctx context.Context, id uuid.UUID) (func(), error) {
-	deadline := time.Now().Add(lockWait)
+func (s *Service) lock(ctx context.Context, id uuid.UUID, wait time.Duration) (func(), error) {
+	deadline := time.Now().Add(wait)
 	for {
 		if _, taken := s.busy.LoadOrStore(id, struct{}{}); !taken {
 			return func() { s.busy.Delete(id) }, nil
@@ -388,20 +417,16 @@ func (s *Service) answer(ctx context.Context, sess *Session, out Emitter) (strin
 	return text, nil
 }
 
-func (s *Service) extract(ctx context.Context, sess Session) <-chan []llm.ToolCall {
-	done := make(chan []llm.ToolCall, 1)
-	go func() {
-		res, err := s.model.Stream(ctx, llm.Request{
-			Messages:   extractMessages(&sess, s.settings.HistoryTurns),
-			Tools:      tools,
-			ToolChoice: llm.Require(saveLeadTool),
-		}, func(string) {})
-		if err != nil {
-			logger.From(ctx).WarnContext(ctx, "chat extraction failed", slog.Any("error", err))
-		}
-		done <- res.ToolCalls
-	}()
-	return done
+func (s *Service) extract(ctx context.Context, sess Session) []llm.ToolCall {
+	res, err := s.model.Stream(ctx, llm.Request{
+		Messages:   extractMessages(&sess, s.settings.HistoryTurns),
+		Tools:      tools,
+		ToolChoice: llm.Require(saveLeadTool),
+	}, func(string) {})
+	if err != nil {
+		logger.From(ctx).WarnContext(ctx, "chat extraction failed", slog.Any("error", err))
+	}
+	return res.ToolCalls
 }
 
 func (s *Service) history(ctx context.Context, sess *Session) []llm.Message {
@@ -447,7 +472,6 @@ type leadArgs struct {
 }
 
 type applied struct {
-	changed  bool
 	question string
 }
 
@@ -461,7 +485,6 @@ func apply(l *Lead, call llm.ToolCall) applied {
 		return applied{}
 	}
 
-	before := *l
 	if contact := parseContact(args.Contact); contact != "" && l.Contact == "" {
 		l.Contact = contact
 	}
@@ -479,7 +502,7 @@ func apply(l *Lead, call llm.ToolCall) applied {
 			*f.dst = v
 		}
 	}
-	return applied{changed: *l != before, question: clip(args.Question, maxQuestionLength)}
+	return applied{question: clip(args.Question, maxQuestionLength)}
 }
 
 func fallback(sess *Session) string {

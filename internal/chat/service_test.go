@@ -178,6 +178,7 @@ func TestReplyStreamsAnswerAndRelaysEveryMessage(t *testing.T) {
 	if err := svc.Reply(t.Context(), Input{Text: "Сколько стоит лендинг?", Locale: "ru", Page: "/ru/uslugi/razrabotka-sajtov"}, out); err != nil {
 		t.Fatal(err)
 	}
+	svc.Wait(t.Context())
 	if out.session == uuid.Nil || out.text.String() != model.reply {
 		t.Fatalf("reply = %q, session %s", out.text.String(), out.session)
 	}
@@ -210,6 +211,7 @@ func TestReplyCatchesContactInText(t *testing.T) {
 	if err := svc.Reply(t.Context(), Input{Text: "Пишите в WhatsApp 8 700 060 00 54", Locale: "ru"}, out); err != nil {
 		t.Fatal(err)
 	}
+	svc.Wait(t.Context())
 	if len(out.leads) == 0 || out.leads[0].Contact != "+77000600054" {
 		t.Fatalf("leads = %+v", out.leads)
 	}
@@ -234,6 +236,7 @@ func TestExtractionAddsContactTheRegexMissed(t *testing.T) {
 	if err := svc.Reply(t.Context(), Input{Text: "мой телеграм sanzhar_dev", Locale: "ru"}, out); err != nil {
 		t.Fatal(err)
 	}
+	svc.Wait(t.Context())
 	last := relay.answered[0]
 	if last.Session.Lead.Contact != "@sanzhar_dev" || last.Session.Lead.Name != "Санжар" || !last.NewContact {
 		t.Fatalf("answered = %+v", last)
@@ -287,6 +290,7 @@ func TestEscalationAdminReplyAndUpdates(t *testing.T) {
 	if err := svc.Reply(t.Context(), Input{Text: "Есть рассрочка?", Locale: "ru"}, out); err != nil {
 		t.Fatal(err)
 	}
+	svc.Wait(t.Context())
 	if !relay.answered[0].Escalated {
 		t.Fatal("question must be escalated")
 	}
@@ -323,6 +327,7 @@ func TestReplyKeepsUserTurnWhenModelFails(t *testing.T) {
 	if err := svc.Reply(t.Context(), Input{Text: "Привет", Locale: "ru"}, out); err == nil {
 		t.Fatal("model failure must surface")
 	}
+	svc.Wait(t.Context())
 	saved, _ := store.find(t.Context(), out.session)
 	if len(saved.Turns) != 1 || saved.Turns[0].Role != RoleUser {
 		t.Fatalf("turns = %+v", saved.Turns)
@@ -339,6 +344,34 @@ func TestEmptyAnswerFallsBackByLocale(t *testing.T) {
 	if !strings.HasPrefix(out.text.String(), "Tell me a bit more") {
 		t.Fatalf("fallback = %q", out.text.String())
 	}
+}
+
+func TestExtractionSeesTheFreshReply(t *testing.T) {
+	model := &scriptedModel{reply: "Уточню у Санжара и напишу здесь же.", extracted: `{"project":"Магазин"}`}
+	svc, _ := newTestService(model, nil, nil)
+	var seen []llm.Message
+	spy := &spyModel{inner: model, onTool: func(m []llm.Message) { seen = m }}
+	svc.model = spy
+
+	if err := svc.Reply(t.Context(), Input{Text: "Нужен магазин", Locale: "ru"}, &recordingEmitter{}); err != nil {
+		t.Fatal(err)
+	}
+	svc.Wait(t.Context())
+	if len(seen) != 2 || !strings.Contains(seen[1].Content, "Консультант: Уточню у Санжара") {
+		t.Fatalf("extraction transcript = %+v", seen)
+	}
+}
+
+type spyModel struct {
+	inner  Model
+	onTool func([]llm.Message)
+}
+
+func (m *spyModel) Stream(ctx context.Context, r llm.Request, onDelta func(string)) (llm.Result, error) {
+	if r.ToolChoice != nil {
+		m.onTool(r.Messages)
+	}
+	return m.inner.Stream(ctx, r, onDelta)
 }
 
 func TestChatLimits(t *testing.T) {

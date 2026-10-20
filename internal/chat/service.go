@@ -93,12 +93,7 @@ func (s *Service) Reply(ctx context.Context, in Input, out Emitter) error {
 	if err != nil {
 		return err
 	}
-	handedOff := false
-	defer func() {
-		if !handedOff {
-			unlock()
-		}
-	}()
+	defer unlock()
 	if sess.ID != 0 {
 		fresh, err := s.store.find(ctx, sess.PublicID)
 		if err != nil {
@@ -143,32 +138,44 @@ func (s *Service) Reply(ctx context.Context, in Input, out Emitter) error {
 		return err
 	}
 
-	handedOff = true
 	s.jobs.Add(1)
 	go func() {
 		defer s.jobs.Done()
-		defer unlock()
-		s.followUp(context.WithoutCancel(ctx), sess, ticket, Notice{Returning: returning, Text: in.Text, Reply: reply})
+		s.followUp(context.WithoutCancel(ctx), snapshot(sess), ticket, Notice{Returning: returning, Text: in.Text, Reply: reply})
 	}()
 	return answerErr
 }
 
-func (s *Service) followUp(ctx context.Context, sess *Session, ticket <-chan Ticket, n Notice) {
+func (s *Service) followUp(ctx context.Context, seen Session, ticket <-chan Ticket, n Notice) {
 	log := logger.From(ctx)
+	calls := s.extract(ctx, seen)
+
+	unlock, err := s.lock(ctx, seen.PublicID, lockWait)
+	if err != nil {
+		<-ticket
+		log.WarnContext(ctx, "chat follow-up skipped", slog.Any("error", err))
+		return
+	}
+	defer unlock()
+
+	sess, err := s.store.find(ctx, seen.PublicID)
+	if err != nil {
+		<-ticket
+		log.ErrorContext(ctx, "find chat for follow-up failed", slog.Any("error", err))
+		return
+	}
 	contact := sess.Lead.Contact
-	for _, call := range s.extract(ctx, snapshot(sess)) {
+	for _, call := range calls {
 		res := apply(&sess.Lead, call)
 		if q := res.question; q != "" && q != sess.Question {
 			sess.Question, sess.Waiting, n.Escalated = q, true, true
 		}
 	}
-	if sess.Lead.Contact != contact {
-		sess.newContact = true
-	}
-	n.Session, n.NewContact = snapshot(sess), sess.newContact
+	sess.newContact = seen.newContact || sess.Lead.Contact != contact
+	n.Session, n.NewContact = snapshot(&sess), sess.newContact
 	s.finish(ctx, ticket, n, log)
 
-	if err := s.persist(ctx, sess); err != nil {
+	if err := s.persist(ctx, &sess); err != nil {
 		log.ErrorContext(ctx, "save chat lead failed", slog.Any("error", err))
 	}
 }

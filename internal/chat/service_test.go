@@ -394,3 +394,38 @@ func TestChatLimits(t *testing.T) {
 		t.Fatalf("too long = %v", err)
 	}
 }
+
+type slowExtraction struct {
+	release chan struct{}
+}
+
+func (m *slowExtraction) Stream(_ context.Context, r llm.Request, onDelta func(string)) (llm.Result, error) {
+	if r.ToolChoice != nil {
+		<-m.release
+		return llm.Result{}, nil
+	}
+	onDelta("ok")
+	return llm.Result{Content: "ok"}, nil
+}
+
+func TestNextMessageDoesNotWaitForExtraction(t *testing.T) {
+	model := &slowExtraction{release: make(chan struct{})}
+	svc, _ := newTestService(model, nil, nil)
+
+	first := &recordingEmitter{}
+	if err := svc.Reply(t.Context(), Input{Text: "раз"}, first); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- svc.Reply(t.Context(), Input{Session: first.session, Text: "два"}, &recordingEmitter{}) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second message waited for the first extraction")
+	}
+	close(model.release)
+	svc.Wait(t.Context())
+}
